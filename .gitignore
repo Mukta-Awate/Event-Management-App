@@ -10,3 +10,7 @@ frontend/dist/
 backend/dist/
 .idea/
 .vscode/
+_bmad/
+_bmad-output/
+.agents/
+.claude/
