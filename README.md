@@ -1,29 +1,43 @@
 # EventDesk — Event Management App
 
-A small full-stack event management product: organizers create and manage events; attendees discover and register. Role and ownership checks are enforced by the NestJS API, not only hidden in the UI.
+Full-stack event management app for the assignment brief: organizers create and manage events; attendees discover and register. Role and ownership checks are enforced by the NestJS API, not only hidden in the UI.
 
-**Stack:** React (Vite + TypeScript) · NestJS · PostgreSQL · TypeORM · JWT
+**Stack:** React (Vite + TypeScript) · NestJS · PostgreSQL (Docker) · TypeORM · JWT
+
+---
+
+## Prerequisites
+
+- Node.js 20+
+- Docker Desktop (with WSL 2 on Windows) — used for PostgreSQL
 
 ---
 
 ## Setup and run
 
-### Prerequisites
+### 1. Start the database (Docker)
 
-- Node.js 20+
-- PostgreSQL 14+ (via Docker Compose below, or any local/remote Postgres instance)
-
-### 1. Database
-
-**With Docker:**
+From the project root:
 
 ```bash
 docker compose up -d
 ```
 
-This starts Postgres on port `5432` with database `event_management`, user `ema`, password `ema` (local demo values only).
+This starts PostgreSQL 16 in container `ema-postgres` on port `5432` with:
 
-**Without Docker:** create an equivalent database/user, then point `backend/.env` at it.
+| Setting | Value (local demo only) |
+| --- | --- |
+| Database | `event_management` |
+| User | `ema` |
+| Password | `ema` |
+
+Check it is running:
+
+```bash
+docker compose ps
+```
+
+Stop later with `docker compose down` (add `-v` only if you want to wipe DB data).
 
 ### 2. Backend
 
@@ -34,7 +48,9 @@ npm install
 npm run start:dev
 ```
 
-API base URL: `http://localhost:3000/api`
+API: `http://localhost:3000/api`
+
+On first start with `SEED_ON_START=true`, TypeORM creates the schema and seeds demo users/events.
 
 ### 3. Frontend
 
@@ -45,17 +61,17 @@ npm install
 npm run dev
 ```
 
-App URL: `http://localhost:5173`
+App: `http://localhost:5173`
 
 ---
 
 ## Environment variables
 
-Copy from the `.env.example` files. **Do not commit real secrets.** The checked-in examples use local demo placeholders only.
+Copy from the `.env.example` files. **Do not commit real secrets.** Checked-in examples use local demo placeholders only. `.env` is gitignored.
 
 ### Backend (`backend/.env`)
 
-| Variable | Description | Example (local only) |
+| Variable | Description | Local example |
 | --- | --- | --- |
 | `PORT` | HTTP port | `3000` |
 | `DATABASE_HOST` | Postgres host | `localhost` |
@@ -63,14 +79,14 @@ Copy from the `.env.example` files. **Do not commit real secrets.** The checked-
 | `DATABASE_USER` | DB user | `ema` |
 | `DATABASE_PASSWORD` | DB password | `ema` |
 | `DATABASE_NAME` | Database name | `event_management` |
-| `JWT_SECRET` | JWT signing secret — **replace for any shared/deployed environment** | `dev-only-change-me-in-production` |
+| `JWT_SECRET` | JWT signing secret — change outside local demo | `dev-only-change-me-in-production` |
 | `JWT_EXPIRES_IN` | Token lifetime | `7d` |
 | `CORS_ORIGIN` | Allowed frontend origin | `http://localhost:5173` |
-| `SEED_ON_START` | Seed demo users/events on boot (`true` / `false`) | `true` |
+| `SEED_ON_START` | Seed demo users/events on boot | `true` |
 
 ### Frontend (`frontend/.env`)
 
-| Variable | Description | Example |
+| Variable | Description | Local example |
 | --- | --- | --- |
 | `VITE_API_URL` | Backend API base URL | `http://localhost:3000/api` |
 
@@ -78,7 +94,7 @@ Copy from the `.env.example` files. **Do not commit real secrets.** The checked-
 
 ## Seeded accounts
 
-Created automatically when `SEED_ON_START=true` (default for local demo):
+Created when `SEED_ON_START=true`:
 
 | Email | Password | Role |
 | --- | --- | --- |
@@ -88,7 +104,7 @@ Created automatically when `SEED_ON_START=true` (default for local demo):
 
 Also seeds a published “Product Meetup” (capacity 3) and a draft workshop owned by the organizer.
 
-**Auth shortcut:** self-registration lets a user pick `organizer` or `attendee`. That is intentional for a local assignment demo. In production you would invite organizers separately, never ship default passwords, store secrets in a vault, use short-lived access tokens (and preferably refresh tokens), and rate-limit auth endpoints.
+**Auth shortcut:** self-registration lets a user pick `organizer` or `attendee` for local demo speed. In production you would invite organizers separately, never ship default passwords, keep secrets in a vault, use short-lived tokens (ideally with refresh), and rate-limit auth.
 
 ---
 
@@ -99,29 +115,29 @@ cd backend
 npm test
 ```
 
-These unit tests exercise the core assignment risks:
+Automated coverage includes:
 
-- Duplicate active registration for the same event/attendee
-- Rejection when the event is full
+- Duplicate active registration prevention
+- Capacity-full rejection
 - Rejection for canceled or already-started events
-- Organizer ownership checks (cannot manage another organizer’s event or attendee list)
-- Capacity cannot be reduced below the number of active registrations
+- Organizer ownership checks (cannot manage another organizer’s events or attendee lists)
+- Capacity cannot be reduced below active registrations
 
-### Concurrent last-seat check
+### Concurrent last-seat verification
 
-An automated Jest race against a live DB is environment-dependent. Use the script once the API is running against Postgres and you have a published event with **exactly one place left** (create a capacity-`1` event, or fill the seeded meetup until one seat remains):
+With the API running and a published event that has **exactly one place left**:
 
 ```bash
 cd backend
 EVENT_ID=<event-uuid> node scripts/concurrent-register.mjs
 ```
 
-Expected outcome: one success and one `409 Conflict` — never two successful registrations over capacity.
+Expected: one success and one `409 Conflict` — never two successful registrations over capacity.
 
 Server-side protection:
 
-1. Transaction + `SELECT … FOR UPDATE` on the event row
-2. Count of active registrations vs capacity before insert
+1. Transaction + `SELECT … FOR UPDATE` on the event row  
+2. Count of active registrations vs capacity before insert  
 3. Partial unique index on `(eventId, attendeeId)` where `status = 'active'`
 
 ---
@@ -142,12 +158,12 @@ Registration
   status (active | canceled), registeredAt, canceledAt
 ```
 
-**Rules encoded in the model/API:**
+**Rules:**
 
-- Public discovery lists only **published** events with `startAt` in the future.
-- Draft and canceled events are not offered for registration.
-- Canceling a registration sets status to `canceled`, which frees capacity for someone else.
-- Organizer-only routes re-check `event.organizerId === currentUser.id` on the server.
+- Public listing shows only **published**, upcoming events.
+- Draft and canceled events are not available for registration.
+- Canceling a registration frees a place.
+- Organizer routes re-check `event.organizerId === currentUser.id` on the server.
 
 ---
 
@@ -155,55 +171,48 @@ Registration
 
 | Decision | Why | Trade-off |
 | --- | --- | --- |
-| Separate `frontend/` and `backend/` | Clear Nest boundary for graders; matches requested stack (React + Nest) | Slightly more setup than a Next.js monolith |
-| TypeORM + `synchronize: true` | Fast local schema bootstrap for the assignment | Not safe for production; migrations would replace this |
-| JWT in `Authorization: Bearer` | Simple, stateless auth for a demo | No refresh rotation; logout is client-side token discard |
-| Role claim on JWT + server ownership checks | UI hiding is not enough for the rubric | Token role could drift if roles changed without re-login (acceptable here) |
-| Pessimistic lock on event row for register | Makes the last-seat race deterministic and easy to explain | Slightly more contention under heavy load than sharded counters |
-| Self-serve role at registration | Speeds seeding and manual testing | Would not ship as multi-tenant production auth |
-| IANA `timeZone` string + UTC `startAt` | Meets “include the event’s time zone” without a heavy calendar library | Browser `datetime-local` editing is approximate; production would use a proper TZ picker |
+| React + NestJS + Postgres/TypeORM | Matches the required stack | Two apps to run instead of one monolith |
+| Postgres via Docker Compose | Reliable local DB without a manual install | Docker Desktop / WSL required on Windows |
+| TypeORM `synchronize: true` | Fast local schema for the assignment | Use migrations in production |
+| JWT Bearer auth | Simple, stateless demo auth | No refresh-token rotation |
+| Role on JWT + ownership checks on API | Meets “backend must enforce” | Role changes need a new login |
+| Pessimistic lock on register | Clear last-seat concurrency story | More row contention under extreme load |
+| Self-serve role at signup | Easy testing with seeded + new users | Not production tenancy |
+| IANA `timeZone` + UTC `startAt` | Meets time-zone requirement without a heavy calendar UI | `datetime-local` editing is approximate |
 
-**Assumptions:** single Postgres instance; one registration “active” at a time per attendee per event; demo secrets are fine on localhost only; deployment is out of scope.
+**Assumptions:** one Postgres instance; at most one active registration per attendee per event; local demo secrets only; deployment optional and out of scope.
 
 ---
 
 ## What was completed
 
-- Organizer create / edit / cancel events (title, description, start, time zone, venue, positive capacity, draft/published/canceled)
-- Backend ownership enforcement and capacity-floor validation
-- Public listing and event detail with places remaining; loading, empty, and error states
-- Attendee register and cancel; duplicate, full, canceled, and started guards; seat release on cancel
+- Event create / edit / cancel for organizers (title, description, start, time zone, venue, positive capacity, draft/published/canceled)
+- Backend ownership and capacity-floor validation
+- Public discovery and event detail with places remaining; loading, empty, and error states
+- Attendee register / cancel with duplicate, full, canceled, and started guards; seat release on cancel
 - Concurrent last-place handling (row lock + unique index) and verification script
-- Organizer dashboard (events, capacity/registration stats, attendee list)
-- Attendee dashboard (upcoming registrations, cancel, canceled distinguished)
+- Organizer dashboard (events, capacity stats, attendee list)
+- Attendee dashboard (registrations, cancel, canceled distinguished)
 - JWT auth with seeded accounts and documented shortcuts
+- Docker Compose Postgres setup
 - Automated unit tests for the highest-risk rules
-- This README (setup, env, seeds, tests, model, trade-offs, status)
+- This README
 
-## What remains unfinished
+## What remains unfinished / out of scope
 
-- Live demo recording / walkthrough video (needs a running Postgres on the submitter’s machine)
-- Database migrations (schema currently uses TypeORM synchronize)
-- Optional DB-backed e2e / concurrent Jest suite wired to CI
-- Git remote / packaged archive packaging (source is present in the project folder)
+- TypeORM migrations (schema uses `synchronize` for local demo)
+- Optional DB-backed e2e / concurrent Jest suite in CI
+- Production hardening (refresh tokens, rate limits, managed secrets)
+- Deploying the app beyond local run (optional per assignment)
 
 ## What I would improve with more time
 
-- Replace synchronize with versioned migrations and a proper seed command
-- Short-lived access tokens + refresh tokens; organizer invite flow instead of self-serve roles
-- Playwright end-to-end covering the main happy path and a forbidden cross-organizer attendee fetch
-- Pagination, search/filter on discovery, and a better time-zone UX
-- Structured logging, request IDs, and rate limiting on auth/register
-- Production deployment (containerized API + managed Postgres) and a recorded demo of the capacity constraint
-
-### Suggested live walkthrough (for a demo video)
-
-1. Sign in as `organizer@example.com` → create and publish a capacity-`1` event.
-2. Sign in as `attendee@example.com` → register successfully.
-3. Sign in as `attendee2@example.com` → see “full” / conflict error.
-4. As organizer, open the attendee list; show another organizer cannot access it.
-5. Cancel the first registration → second attendee can register.
-6. Optionally run `concurrent-register.mjs` against a last-seat event.
+- Versioned migrations and an explicit seed command
+- Short-lived access + refresh tokens; invite-only organizers
+- Playwright e2e for the main journey and cross-organizer access denial
+- Pagination, search/filter on discovery, better time-zone picker
+- Structured logging and rate limiting on auth/register
+- Optional Docker images for API and frontend so the full stack runs under Compose
 
 ---
 
@@ -212,6 +221,6 @@ Registration
 ```
 backend/               NestJS API, TypeORM entities, unit tests
 frontend/              React (Vite) SPA
-docker-compose.yml     Local Postgres
+docker-compose.yml     PostgreSQL service
 README.md              This file
 ```
